@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<dds xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+
+  <!-- Define the data structure -->
+  <types>
+    <const name="MAX_NAME_SIZE" type="int32" value="128"/>
+    <struct name="TicketInfo" extensibility="extensible">
+      <member name="name" type="string" stringMaxLength="MAX_NAME_SIZE"/>
+      <member name="phone" type="string" stringMaxLength="MAX_NAME_SIZE" key="true"/>
+      <member name="department" type="string" stringMaxLength="MAX_NAME_SIZE"/>
+      <member name="status" type="string" stringMaxLength="MAX_NAME_SIZE"/>
+      <member name="time_requested" type="string" stringMaxLength="MAX_NAME_SIZE"/>
+      <member name="time_called" type="string" stringMaxLength="MAX_NAME_SIZE" optional="true"/>
+      <member name="time_completed" type="string" stringMaxLength="MAX_NAME_SIZE" optional="true"/>
+    </struct>
+  </types>
+
+  <!-- Define QoS settings -->
+    <qos_library name="HospitalQoS_Library">
+      <qos_profile name="DurableProfile">
+        <datawriter_qos>
+          <durability>
+            <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+          </durability>
+          <reliability>
+            <kind>RELIABLE_RELIABILITY_QOS</kind>
+          </reliability>
+          <history>
+            <kind>KEEP_LAST_HISTORY_QOS</kind>
+            <depth>5</depth>
+          </history>
+        </datawriter_qos>
+        <datareader_qos>
+          <durability>
+            <kind>TRANSIENT_LOCAL_DURABILITY_QOS</kind>
+          </durability>
+          <reliability>
+            <kind>RELIABLE_RELIABILITY_QOS</kind>
+          </reliability>
+          <history>
+            <depth>5</depth>
+          </history>
+        </datareader_qos>
+      </qos_profile>
+    </qos_library>
+
+  <!-- Define the domain and topics -->
+  <domain_library name="HospitalDomain_Library">
+    <domain name="HospitalDomain" domain_id="0">
+      <register_type name="TicketInfo" type_ref="TicketInfo"/>
+      <topic name="RadiologyTopic" register_type_ref="TicketInfo"/>
+      <topic name="PharmacyTopic" register_type_ref="TicketInfo"/>
+      <topic name="EmergencyTopic" register_type_ref="TicketInfo"/>
+      <topic name="LaboratoryTopic" register_type_ref="TicketInfo"/>
+    </domain>
+  </domain_library>
+
+
+  <!-- Define participants and writers/readers -->
+  <domain_participant_library name="MyParticipantLibrary">
+    <domain_participant name="HospitalParticipant" domain_ref="HospitalDomain_Library::HospitalDomain">
+      <publisher name="MyPublisher">
+        <data_writer name="RadiologyWriter" topic_ref="RadiologyTopic">
+          <datawriter_qos base_name="HospitalQoS_Library::DurableProfile">
+          </datawriter_qos>
+        </data_writer>
+        <data_writer name="PharmacyWriter" topic_ref="PharmacyTopic">
+          <datawriter_qos base_name="HospitalQoS_Library::DurableProfile">
+          </datawriter_qos>
+        </data_writer>
+        <data_writer name="EmergencyWriter" topic_ref="EmergencyTopic">
+          <datawriter_qos base_name="HospitalQoS_Library::DurableProfile">
+          </datawriter_qos>
+        </data_writer>
+        <data_writer name="LaboratoryWriter" topic_ref="LaboratoryTopic">
+          <datawriter_qos base_name="HospitalQoS_Library::DurableProfile">
+          </datawriter_qos>
+        </data_writer>
+      </publisher>
+      <subscriber name="MySubscriber">
+        <data_reader name="RadiologyReader" topic_ref="RadiologyTopic">
+          <datareader_qos base_name="HospitalQoS_Library::DurableProfile">
+          </datareader_qos>
+        </data_reader>
+        <data_reader name="PharmacyReader" topic_ref="PharmacyTopic">
+          <datareader_qos base_name="HospitalQoS_Library::DurableProfile">
+          </datareader_qos>
+        </data_reader>
+        <data_reader name="EmergencyReader" topic_ref="EmergencyTopic">
+          <datareader_qos base_name="HospitalQoS_Library::DurableProfile">
+          </datareader_qos>
+        </data_reader>
+        <data_reader name="LaboratoryReader" topic_ref="LaboratoryTopic">
+          <datareader_qos base_name="HospitalQoS_Library::DurableProfile">
+          </datareader_qos>
+        </data_reader>
+      </subscriber>
+      <participant_qos base_name="HospitalQoS_Library::DurableProfile">
+      </participant_qos>
+    </domain_participant>
+  </domain_participant_library>
+</dds>
