@@ -1,130 +1,228 @@
-import os
 import tkinter as tk
-from datetime import datetime
 from rticonnextdds_connector import Connector
-from collections import defaultdict
-
-# DDS setup
-file_path = os.path.dirname(os.path.realpath(__file__))
-xml_path = os.path.join(file_path, "HospitalConfig.xml")
-
-readers = {
-    "Radiology": "RadiologyReader",
-    "Pharmacy": "PharmacyReader",
-    "Emergency": "EmergencyReader",
-    "Laboratory": "LaboratoryReader"
-}
-
-STATUS_COLORS = {
-    "waiting": "orange",
-    "called": "blue",
-    "serviced": "gray"
-}
+from datetime import datetime
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.pyplot as plt
 
 class AllTicketsDashboard:
     def __init__(self, root):
         self.root = root
-        self.root.title("📋 All Tickets Dashboard")
-        self.root.geometry("900x600")
+        self.root.title("📊 Hospital Ticket Dashboard")
+        self.root.geometry("1000x850")
+        self.root.configure(bg="#f4f6f8")
 
-        # Stats Frame
-        self.stats_frame = tk.Frame(root)
-        self.stats_frame.pack(fill=tk.X, pady=10)
+        self.xml_path = "HospitalConfig.xml"
+        self.connector = Connector("MyParticipantLibrary::HospitalParticipant", self.xml_path)
 
-        # Scrollable Ticket List
-        canvas = tk.Canvas(root)
-        scrollbar = tk.Scrollbar(root, orient="vertical", command=canvas.yview)
-        self.scroll_frame = tk.Frame(canvas)
+        self.readers = {
+            "Radiology": self.connector.get_input("MySubscriber::RadiologyReader"),
+            "Pharmacy": self.connector.get_input("MySubscriber::PharmacyReader"),
+            "Emergency": self.connector.get_input("MySubscriber::EmergencyReader"),
+            "Laboratory": self.connector.get_input("MySubscriber::LaboratoryReader")
+        }
 
-        self.scroll_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-
-        canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-
-        # DDS Setup
         self.tickets = {}
-        self.connector = Connector("MyParticipantLibrary::HospitalParticipant", xml_path)
-        self.readers = {dept: self.connector.get_input(f"MySubscriber::{r}") for dept, r in readers.items()}
+        self.selected_department = tk.StringVar(value="All")
+        self.sort_order = tk.StringVar(value="Newest First")
+        self.selected_status = tk.StringVar(value="All")
 
-        self.build_table()
+        # Header
+        top_bar = tk.Frame(self.root, bg="#3f51b5")
+        top_bar.pack(fill="x")
+        title = tk.Label(top_bar, text="Hospital Queue Dashboard", font=("Arial", 18, "bold"), fg="white", bg="#3f51b5")
+        title.pack(padx=10, pady=10)
+
+        # Filters
+        filter_frame = tk.Frame(self.root, bg="#f4f6f8")
+        filter_frame.pack(pady=(10, 5))
+
+        tk.Label(filter_frame, text="Department:", font=("Arial", 12), bg="#f4f6f8").pack(side="left", padx=5)
+        dept_menu = tk.OptionMenu(filter_frame, self.selected_department, "All", *self.readers.keys())
+        dept_menu.config(font=("Arial", 11, "bold"), relief="flat", bg="#e0e0e0", fg="#000", activebackground="#d5d5d5", highlightthickness=1, highlightbackground="#bdbdbd")
+        dept_menu["menu"].config(font=("Arial", 11))
+        dept_menu.pack(side="left", padx=5)
+
+        tk.Label(filter_frame, text="Sort by Time:", font=("Arial", 12), bg="#f4f6f8").pack(side="left", padx=10)
+        sort_menu = tk.OptionMenu(filter_frame, self.sort_order, "Newest First", "Oldest First")
+        sort_menu.config(font=("Arial", 11, "bold"), relief="flat", bg="#e0e0e0", fg="#000", activebackground="#d5d5d5", highlightthickness=1, highlightbackground="#bdbdbd")
+        sort_menu["menu"].config(font=("Arial", 11))
+        sort_menu.pack(side="left", padx=5)
+
+        tk.Label(filter_frame, text="Status:", font=("Arial", 12), bg="#f4f6f8").pack(side="left", padx=10)
+        status_menu = tk.OptionMenu(filter_frame, self.selected_status, "All", "Waiting", "Called", "Serviced")
+        status_menu.config(font=("Arial", 11, "bold"), relief="flat", bg="#e0e0e0", fg="#000", activebackground="#d5d5d5", highlightthickness=1, highlightbackground="#bdbdbd")
+        status_menu["menu"].config(font=("Arial", 11))
+        status_menu.pack(side="left", padx=5)
+
+        self.summary_label = tk.Label(self.root, text="", font=("Arial", 13, "bold"), fg="#333", bg="#f4f6f8")
+        self.summary_label.pack(pady=10)
+
+        self.table_frame = tk.Frame(self.root, bg="white", padx=10, pady=10)
+        self.table_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        self.chart_frame = tk.Frame(self.root, bg="#f4f6f8")
+        self.chart_frame.pack(pady=10)
+        self.bar_canvas = None
+        self.pie_canvas = None
+
+        self.render_table()
         self.refresh()
 
-    def build_table(self):
-        # Clear both frames
-        for widget in self.stats_frame.winfo_children():
-            widget.destroy()
-        for widget in self.scroll_frame.winfo_children():
+    def render_table(self):
+        for widget in self.table_frame.winfo_children():
             widget.destroy()
 
-        # -------------------------
-        # 📊 Stats Panel
-        # -------------------------
-        stats = defaultdict(lambda: defaultdict(int))
-        for ticket in self.tickets.values():
-            dept = ticket.get("department", "").capitalize()
-            status = ticket.get("status", "").lower()
-            stats[dept][status] += 1
-            stats[dept]["total"] += 1
+        headers = ["Phone", "Name", "Department", "Status", "Time Requested", "Time Called", "Time Completed", "Service Time (sec)"]
+        for col, header in enumerate(headers):
+            label = tk.Label(self.table_frame, text=header, font=("Arial", 12, "bold"),
+                             borderwidth=1, relief="solid", padx=6, pady=4,
+                             bg="#eceff1", highlightbackground="#ccc", highlightthickness=1)
+            label.grid(row=0, column=col, sticky="nsew")
 
-        tk.Label(self.stats_frame, text="📊 Live Ticket Stats", font=("Arial", 14, "bold")).pack()
+        dept_filter = self.selected_department.get()
+        status_filter = self.selected_status.get()
+        sort_order = self.sort_order.get()
 
-        for dept, counts in stats.items():
-            text = f"• {dept}:  "
-            for status in ["waiting", "called", "serviced"]:
-                count = counts.get(status, 0)
-                text += f"{status.capitalize()}={count}  "
-            tk.Label(self.stats_frame, text=text, font=("Arial", 10), fg="darkblue").pack(anchor="w")
+        filtered = []
+        for t in self.tickets.values():
+            if dept_filter != "All" and t.get("department", "").lower() != dept_filter.lower():
+                continue
+            if status_filter != "All" and t.get("status", "").lower() != status_filter.lower():
+                continue
+            filtered.append(t)
 
-        # -------------------------
-        # 🧾 Ticket Table
-        # -------------------------
-        headers = ["Name", "Phone", "Department", "Status", "Time Requested"]
-        for i, h in enumerate(headers):
-            tk.Label(self.scroll_frame, text=h, font=("Arial", 10, "bold")).grid(row=0, column=i, padx=10, pady=6)
+        def get_time_requested(t):
+            try:
+                return datetime.fromisoformat(t.get("time_requested", ""))
+            except:
+                return datetime.min
 
-        sorted_tickets = sorted(
-            self.tickets.values(),
-            key=lambda x: x.get("time_requested", ""),
-        )
+        filtered = sorted(filtered, key=get_time_requested, reverse=(sort_order == "Newest First"))
 
-        for idx, data in enumerate(sorted_tickets, start=1):
-            status = data.get("status", "").lower()
-            color = STATUS_COLORS.get(status, "black")
+        for row, data in enumerate(filtered, start=1):
+            for col, key in enumerate(["phone", "name", "department", "status", "time_requested", "time_called", "time_completed"]):
+                value = data.get(key, "")
+                kwargs = {
+                    "font": ("Arial", 11),
+                    "borderwidth": 1,
+                    "relief": "solid",
+                    "padx": 6,
+                    "pady": 4,
+                    "highlightbackground": "#ccc",
+                    "highlightthickness": 1
+                }
+                if key == "status":
+                    status = value.lower()
+                    if status == "waiting":
+                        kwargs["bg"] = "#fbc02d"
+                    elif status == "called":
+                        kwargs["bg"] = "#66bb6a"
+                    elif status == "serviced":
+                        kwargs["bg"] = "#ef5350"
+                label = tk.Label(self.table_frame, text=value, **kwargs)
+                label.grid(row=row, column=col, sticky="nsew")
 
-            tk.Label(self.scroll_frame, text=data.get("name", ""), font=("Arial", 10)).grid(row=idx, column=0)
-            tk.Label(self.scroll_frame, text=data.get("phone", ""), font=("Arial", 10)).grid(row=idx, column=1)
-            tk.Label(self.scroll_frame, text=data.get("department", ""), font=("Arial", 10)).grid(row=idx, column=2)
-            tk.Label(
-                self.scroll_frame,
-                text=status,
-                fg="white",
-                bg=color,
-                font=("Arial", 10, "bold"),
-                width=10
-            ).grid(row=idx, column=3, padx=5, pady=2)
-            tk.Label(self.scroll_frame, text=data.get("time_requested", ""), font=("Arial", 10)).grid(row=idx, column=4)
+            try:
+                t_requested = datetime.fromisoformat(data.get("time_requested"))
+                t_completed = datetime.fromisoformat(data.get("time_completed")) if data.get("time_completed") else None
+                if t_completed:
+                    service_time = int((t_completed - t_requested).total_seconds())
+                else:
+                    service_time = ""
+            except:
+                service_time = ""
+
+            label = tk.Label(self.table_frame, text=service_time, font=("Arial", 11), borderwidth=1, relief="solid",
+                             padx=6, pady=4, highlightbackground="#ccc", highlightthickness=1)
+            label.grid(row=row, column=7, sticky="nsew")
+
+    def update_charts(self):
+        if self.bar_canvas:
+            self.bar_canvas.get_tk_widget().destroy()
+        if self.pie_canvas:
+            self.pie_canvas.get_tk_widget().destroy()
+
+        dept_counts = {}
+        status_counts = {"waiting": 0, "called": 0, "serviced": 0}
+        for t in self.tickets.values():
+            dept = t.get("department", "Unknown")
+            dept_counts[dept] = dept_counts.get(dept, 0) + 1
+            s = t.get("status", "").lower()
+            if s in status_counts:
+                status_counts[s] += 1
+
+        fig1, ax1 = plt.subplots(figsize=(4, 3))
+        ax1.bar(dept_counts.keys(), dept_counts.values(), color="#42a5f5")
+        ax1.set_title("Tickets per Department")
+
+        self.bar_canvas = FigureCanvasTkAgg(fig1, master=self.chart_frame)
+        self.bar_canvas.draw()
+        self.bar_canvas.get_tk_widget().pack(side="left", padx=10)
+
+        fig2, ax2 = plt.subplots(figsize=(4, 3))
+        labels = []
+        sizes = []
+        colors = []
+
+        for status, count in status_counts.items():
+            if count > 0:
+                labels.append(status)
+                sizes.append(count)
+                if status == "waiting":
+                    colors.append("#fbc02d")
+                elif status == "called":
+                    colors.append("#66bb6a")
+                elif status == "serviced":
+                    colors.append("#ef5350")
+
+        if sizes:
+            ax2.pie(sizes, labels=labels, autopct="%1.1f%%", colors=colors)
+        else:
+            ax2.text(0.5, 0.5, "No data", ha="center", va="center", fontsize=12)
+
+        ax2.set_title("Status Distribution")
+        self.pie_canvas = FigureCanvasTkAgg(fig2, master=self.chart_frame)
+        self.pie_canvas.draw()
+        self.pie_canvas.get_tk_widget().pack(side="right", padx=10)
 
     def refresh(self):
-        try:
-            for dept, reader in self.readers.items():
-                reader.read()
-                for sample in reader.samples.valid_data_iter:
-                    d = sample.get_dictionary()
-                    self.tickets[d["phone"]] = d
-                    print(f"📥 {d['department']} - {d['name']} ({d['status']})")
-        except Exception as e:
-            print(f"⚠️ DDS Error: {e}")
+        for dept, reader in self.readers.items():
+            reader.read()
+            for sample in reader.samples.valid_data_iter:
+                data = sample.get_dictionary()
+                self.tickets[data["phone"]] = data
 
-        self.build_table()
+        total_waiting = total_called = total_serviced = 0
+        total_service_time = 0
+        completed_count = 0
+
+        for t in self.tickets.values():
+            status = t.get("status", "").lower()
+            if status == "waiting":
+                total_waiting += 1
+            elif status == "called":
+                total_called += 1
+            elif status == "serviced":
+                total_serviced += 1
+
+            try:
+                if t.get("time_completed"):
+                    t1 = datetime.fromisoformat(t["time_requested"])
+                    t2 = datetime.fromisoformat(t["time_completed"])
+                    total_service_time += int((t2 - t1).total_seconds())
+                    completed_count += 1
+            except:
+                pass
+
+        avg_service = total_service_time // completed_count if completed_count > 0 else 0
+        self.summary_label.config(
+            text=f"🧾 Waiting: {total_waiting} | Called: {total_called} | Serviced: {total_serviced} | Avg Service Time: {avg_service}s"
+        )
+
+        self.render_table()
+        self.update_charts()
         self.root.after(3000, self.refresh)
 
-# Run GUI
 if __name__ == "__main__":
     root = tk.Tk()
     app = AllTicketsDashboard(root)
